@@ -1,6 +1,6 @@
 .PHONY: lint lint-source docker-tools fmt fmt-check tidy-module tidy-module-check
 .PHONY: unit unit-cover unit-race check-go-version build install clean release
-.PHONY: itest itest-verbose help
+.PHONY: itest itest-verbose help man
 
 # Default target.
 .DEFAULT_GOAL := build
@@ -93,7 +93,7 @@ UNIT_COVER := $(GOTEST) $(COVER_FLAGS) -tags="$(DEV_TAGS) $(LOG_TAGS)" $(TEST_FL
 # Linting uses a lot of memory, so keep it under control by limiting the number
 # of workers if requested.
 ifneq ($(workers),)
-LINT_WORKERS = --concurrency=$(workers)
+LINT_WORKERS_FLAG = --concurrency=$(workers)
 endif
 
 # Docker cache mounting strategy:
@@ -106,6 +106,7 @@ DOCKER_TOOLS = docker run \
   -v $${HOME}/.cache/golangci-lint:/root/.cache/golangci-lint \
   -v $${HOME}/go/pkg/mod:/go/pkg/mod \
   -e GOPATH=/go \
+  -e LINT_WORKERS="$(LINT_WORKERS_FLAG)" \
   -v $$(pwd):/build lnget-tools
 else
 DOCKER_TOOLS = docker run \
@@ -114,6 +115,7 @@ DOCKER_TOOLS = docker run \
   -v lnget-go-lint-cache:/root/.cache/golangci-lint \
   -v lnget-go-mod-cache:/go/pkg/mod \
   -e GOPATH=/go \
+  -e LINT_WORKERS="$(LINT_WORKERS_FLAG)" \
   -v $$(pwd):/build lnget-tools
 endif
 
@@ -150,7 +152,7 @@ docker-tools:
 
 lint-source: docker-tools
 	@$(call print, "Linting source.")
-	$(DOCKER_TOOLS) golangci-lint run -v $(LINT_WORKERS)
+	$(DOCKER_TOOLS)
 
 lint: check-go-version lint-source #? Run static code analysis
 
@@ -235,6 +237,14 @@ release: #? Cross compile for all supported platforms
 		$(GOBUILD) -trimpath $(RELEASE_LDFLAGS) -tags="$(RELEASE_TAGS)" -o ./bin/lnget-$$sys ./cmd/lnget; \
 		echo; \
 	done
+
+# ==============
+# DOCUMENTATION
+# ==============
+
+man: #? Generate man pages
+	@$(call print, "Generating man pages.")
+	$(GOCC) run docs/gen_man.go
 
 # ============
 # HELP
