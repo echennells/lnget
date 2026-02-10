@@ -92,7 +92,7 @@ func (l *LNDBackend) PayInvoice(ctx context.Context, invoice string,
 		Invoice:          invoice,
 		Timeout:          timeout,
 		MaxFeeMsat:       lnwire.MilliSatoshi(maxFeeSat * 1000),
-		AllowSelfPayment: false,
+		AllowSelfPayment: true,
 	}
 
 	// Send the payment.
