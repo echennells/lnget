@@ -8,7 +8,6 @@ import (
 
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwire"
-	"gopkg.in/macaroon.v2"
 )
 
 // PaymentResult contains the result of an invoice payment.
@@ -110,18 +109,15 @@ func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 			"maximum %d sats", challenge.InvoiceAmount, h.maxCostSat)
 	}
 
-	// Create a pending token. We construct it directly since aperture's
-	// tokenFromChallenge is unexported.
-	mac := &macaroon.Macaroon{}
-
-	err = mac.UnmarshalBinary(challenge.Macaroon)
+	// Create a pending token with the base macaroon properly set.
+	// Aperture's tokenFromChallenge is unexported, so we use the
+	// binary round-trip constructor.
+	token, err := NewTokenFromChallenge(
+		challenge.Macaroon, challenge.PaymentHash,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal macaroon: %w", err)
-	}
-
-	token := &Token{
-		PaymentHash: challenge.PaymentHash,
-		TimeCreated: time.Now(),
+		return nil, fmt.Errorf("failed to create token from "+
+			"challenge: %w", err)
 	}
 
 	// Store the pending token before payment to handle interruptions.
