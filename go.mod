@@ -15,6 +15,7 @@ require (
 	github.com/lightningnetwork/lnd v0.20.0-beta
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/viper v1.19.0
+	github.com/stretchr/testify v1.10.0
 	google.golang.org/grpc v1.62.1
 	gopkg.in/macaroon.v2 v2.1.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -145,7 +146,6 @@ require (
 	github.com/spf13/cast v1.6.0 // indirect
 	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 // indirect
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20201229170055-e5319fda7802 // indirect
