@@ -142,8 +142,8 @@ the existing token without additional payments.`,
 	cmd.Flags().BoolVarP(&flags.verbose, "verbose", "v", false,
 		"Verbose output")
 
-	// Config flags.
-	cmd.Flags().StringVar(&flags.configFile, "config", "",
+	// Config flags — persistent so subcommands inherit them.
+	cmd.PersistentFlags().StringVar(&flags.configFile, "config", "",
 		"Config file path")
 
 	// Security flags.
@@ -223,10 +223,17 @@ func runGet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create token store: %w", err)
 	}
 
-	// Create the Lightning backend.
+	// Create the Lightning backend. If the backend fails to initialize
+	// or connect, fall back to a no-op backend so lnget can still
+	// function as a normal HTTP client. The error is deferred until a
+	// server actually returns a 402 requiring payment.
 	backend, err := createBackend(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to create LN backend: %w", err)
+		fmt.Fprintf(os.Stderr,
+			"Warning: LN backend unavailable (%v), "+
+				"L402 payments disabled\n", err)
+
+		backend = ln.NewNoopBackend()
 	}
 
 	ctx := context.Background()
@@ -234,7 +241,11 @@ func runGet(cmd *cobra.Command, args []string) error {
 	// Start the backend.
 	err = backend.Start(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to start LN backend: %w", err)
+		fmt.Fprintf(os.Stderr,
+			"Warning: LN backend failed to start (%v), "+
+				"L402 payments disabled\n", err)
+
+		backend = ln.NewNoopBackend()
 	}
 
 	defer func() {
@@ -327,6 +338,9 @@ func createBackend(cfg *config.Config) (ln.Backend, error) {
 
 	case config.LNModeNeutrino:
 		return nil, fmt.Errorf("Neutrino backend not yet implemented")
+
+	case config.LNModeNone:
+		return ln.NewNoopBackend(), nil
 
 	default:
 		return nil, fmt.Errorf("unknown LN backend mode: %s", cfg.LN.Mode)
