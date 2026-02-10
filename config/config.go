@@ -23,6 +23,11 @@ const (
 
 	// LNModeNeutrino uses an embedded neutrino wallet.
 	LNModeNeutrino LNMode = "neutrino"
+
+	// LNModeNone disables the Lightning backend. lnget operates as a
+	// plain HTTP client and returns a clear error if a server requires
+	// L402 payment.
+	LNModeNone LNMode = "none"
 )
 
 // OutputFormat represents the output format for lnget.
@@ -328,7 +333,7 @@ func (c *Config) Validate() error {
 	}
 
 	switch c.LN.Mode {
-	case LNModeLND, LNModeLNC, LNModeNeutrino:
+	case LNModeLND, LNModeLNC, LNModeNeutrino, LNModeNone:
 		// Valid modes.
 
 	default:
