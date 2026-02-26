@@ -220,6 +220,7 @@ clean: #? Remove build artifacts
 	@$(call print, "Cleaning build artifacts.")
 	$(RM) ./lnget
 	$(RM) -r ./bin
+	$(RM) -r ./api/dashboard_dist
 
 # ============
 # RELEASE
@@ -250,7 +251,9 @@ dashboard-build: #? Build the Next.js dashboard for static export
 
 build-production: dashboard-build #? Build production binary with embedded dashboard
 	@$(call print, "Building production binary with embedded dashboard.")
-	$(GOBUILD) -trimpath -tags="$(RELEASE_TAGS)" $(RELEASE_LDFLAGS) -o lnget ./cmd/lnget
+	rm -rf api/dashboard_dist
+	cp -r $(DASHBOARD_DIR)/out api/dashboard_dist
+	$(GOBUILD) -trimpath -tags="$(RELEASE_TAGS) dashboard" $(RELEASE_LDFLAGS) -o lnget ./cmd/lnget
 	@echo "Production build complete with embedded frontend."
 
 # ==============

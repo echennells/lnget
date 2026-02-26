@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -70,10 +71,24 @@ func NewServer(cfg *ServerConfig) *Server {
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 
-	// Serve static dashboard files if configured.
-	if cfg.DashboardDir != "" {
-		fs := http.FileServer(http.Dir(cfg.DashboardDir))
-		mux.Handle("/", fs)
+	// Serve static dashboard files. An explicit directory takes
+	// priority over embedded assets.
+	switch {
+	case cfg.DashboardDir != "":
+		mux.Handle("/", http.FileServer(
+			http.Dir(cfg.DashboardDir),
+		))
+
+	case dashboardEmbedded:
+		sub, err := fs.Sub(embeddedDashboard, "dashboard_dist")
+		if err != nil {
+			log.Printf("warning: failed to load embedded "+
+				"dashboard: %v", err)
+		} else {
+			mux.Handle("/", http.FileServer(
+				http.FS(sub),
+			))
+		}
 	}
 
 	s.httpServer = &http.Server{
