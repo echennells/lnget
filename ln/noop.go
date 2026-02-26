@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/lightninglabs/lnget/l402"
 )
 
 // ErrNoBackend is returned when a Lightning payment is required but no
@@ -35,7 +37,7 @@ func (n *NoopBackend) Stop() error {
 //
 //nolint:whitespace,wsl_v5
 func (n *NoopBackend) PayInvoice(_ context.Context, _ string, _ int64,
-	_ time.Duration) (*PaymentResult, error) {
+	_ time.Duration) (*l402.PaymentResult, error) {
 
 	return nil, ErrNoBackend
 }

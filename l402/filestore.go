@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lightninglabs/aperture/l402"
 )
@@ -36,14 +37,25 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 	}, nil
 }
 
-// domainDir returns the directory path for a domain's tokens.
-func (f *FileStore) domainDir(domain string) string {
-	return filepath.Join(f.baseDir, SanitizeDomain(domain))
+// domainDir returns the directory path for a domain's tokens. It returns
+// an error if the domain sanitizes to an unsafe value.
+func (f *FileStore) domainDir(domain string) (string, error) {
+	sanitized, err := SanitizeDomain(domain)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Join(f.baseDir, sanitized), nil
 }
 
 // getDomainStore returns the aperture FileStore for a specific domain.
 func (f *FileStore) getDomainStore(domain string) (*l402.FileStore, error) {
-	return l402.NewFileStore(f.domainDir(domain))
+	dir, err := f.domainDir(domain)
+	if err != nil {
+		return nil, err
+	}
+
+	return l402.NewFileStore(dir)
 }
 
 // GetToken retrieves the current valid token for a domain.
@@ -56,14 +68,24 @@ func (f *FileStore) GetToken(domain string) (*Token, error) {
 	return store.CurrentToken()
 }
 
-// StoreToken saves or updates a token for a domain.
+// StoreToken saves or updates a token for a domain. It also writes a
+// .domain metadata file so that AllTokens can recover the original
+// domain name losslessly (SanitizeDomain is lossy for underscored
+// domains).
 func (f *FileStore) StoreToken(domain string, token *Token) error {
 	store, err := f.getDomainStore(domain)
 	if err != nil {
 		return err
 	}
 
-	return store.StoreToken(token)
+	if err := store.StoreToken(token); err != nil {
+		return err
+	}
+
+	// Best-effort: write domain metadata for lossless round-trip.
+	_ = storeDomainMetadata(f.baseDir, domain)
+
+	return nil
 }
 
 // AllTokens returns all stored tokens mapped by domain.
@@ -99,19 +121,41 @@ func (f *FileStore) AllTokens() (map[string]*Token, error) {
 		}
 
 		// Use the original domain as the key.
-		originalDomain := GetOriginalDomain(sanitizedDomain)
+		originalDomain := GetOriginalDomain(f.baseDir, sanitizedDomain)
 		tokens[originalDomain] = token
 	}
 
 	return tokens, nil
 }
 
-// RemoveToken deletes the token for a domain.
+// RemoveToken deletes the token for a domain. It validates that the
+// resolved path stays within the base directory to prevent path
+// traversal attacks.
 func (f *FileStore) RemoveToken(domain string) error {
-	domainDir := f.domainDir(domain)
+	domainDir, err := f.domainDir(domain)
+	if err != nil {
+		return err
+	}
+
+	// Resolve to absolute path and verify it stays within baseDir.
+	absDir, err := filepath.Abs(domainDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve path: %w", err)
+	}
+
+	absBase, err := filepath.Abs(f.baseDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve base path: %w", err)
+	}
+
+	// The resolved path must be a child of the base directory.
+	if !strings.HasPrefix(absDir, absBase+string(filepath.Separator)) {
+		return fmt.Errorf("path escapes token store: %w",
+			ErrInvalidDomain)
+	}
 
 	// Remove the entire domain directory.
-	err := os.RemoveAll(domainDir)
+	err = os.RemoveAll(domainDir)
 	if err != nil {
 		return fmt.Errorf("failed to remove token: %w", err)
 	}
@@ -168,7 +212,7 @@ func (f *FileStore) ListDomains() ([]string, error) {
 
 		_, err := f.GetToken(sanitizedDomain)
 		if err == nil {
-			domains = append(domains, GetOriginalDomain(sanitizedDomain))
+			domains = append(domains, GetOriginalDomain(f.baseDir, sanitizedDomain))
 		}
 	}
 

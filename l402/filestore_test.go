@@ -127,7 +127,11 @@ func TestFileStoreDomainDir(t *testing.T) {
 
 	// Test domain dir for a simple domain.
 	expected := filepath.Join(tmpDir, "example.com")
-	result := store.domainDir("example.com")
+
+	result, err := store.domainDir("example.com")
+	if err != nil {
+		t.Fatalf("domainDir() error = %v", err)
+	}
 
 	if result != expected {
 		t.Errorf("domainDir() = %q, want %q", result, expected)
@@ -135,7 +139,11 @@ func TestFileStoreDomainDir(t *testing.T) {
 
 	// Test domain dir with port.
 	expected = filepath.Join(tmpDir, "example.com_8080")
-	result = store.domainDir("example.com:8080")
+
+	result, err = store.domainDir("example.com:8080")
+	if err != nil {
+		t.Fatalf("domainDir() error = %v", err)
+	}
 
 	if result != expected {
 		t.Errorf("domainDir() = %q, want %q", result, expected)
@@ -160,7 +168,10 @@ func TestFileStoreGetDomainStore(t *testing.T) {
 	}
 
 	// Verify domain directory was created.
-	domainDir := store.domainDir(domain)
+	domainDir, err := store.domainDir(domain)
+	if err != nil {
+		t.Fatalf("domainDir() error = %v", err)
+	}
 
 	_, err = os.Stat(domainDir)
 	if os.IsNotExist(err) {
@@ -222,6 +233,45 @@ func TestFileStoreListDomainsWithNonDirEntries(t *testing.T) {
 	if len(domains) != 0 {
 		t.Errorf("ListDomains() returned %d domains, want 0",
 			len(domains))
+	}
+}
+
+// TestFileStoreRemoveTokenPathTraversal verifies that RemoveToken rejects
+// domains that would resolve outside the base directory.
+func TestFileStoreRemoveTokenPathTraversal(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	store, err := NewFileStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewFileStore() error = %v", err)
+	}
+
+	// SanitizeDomain strips slashes, so "../../etc" becomes "....etc"
+	// which is safe. But ".." sanitizes to ".." which is explicitly
+	// rejected by SanitizeDomain.
+	err = store.RemoveToken("..")
+	if err == nil {
+		t.Errorf("RemoveToken(..) should have returned error")
+	}
+
+	// Single dot should also be rejected.
+	err = store.RemoveToken(".")
+	if err == nil {
+		t.Errorf("RemoveToken(.) should have returned error")
+	}
+
+	// Empty domain should be rejected.
+	err = store.RemoveToken("")
+	if err == nil {
+		t.Errorf("RemoveToken('') should have returned error")
+	}
+
+	// Verify that a path with slashes is sanitized to a safe value
+	// (slashes are stripped, so the result stays in baseDir).
+	err = store.RemoveToken("../../etc")
+	if err != nil {
+		t.Errorf("RemoveToken(../../etc) unexpectedly errored: %v "+
+			"(slashes are stripped by sanitizer)", err)
 	}
 }
 

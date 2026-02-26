@@ -6,21 +6,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/lightningnetwork/lnd/lntypes"
-	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/lightninglabs/lnget/l402"
 )
-
-// PaymentResult contains the result of an invoice payment.
-type PaymentResult struct {
-	// Preimage is the payment preimage.
-	Preimage lntypes.Preimage
-
-	// AmountPaid is the amount paid in millisatoshis.
-	AmountPaid lnwire.MilliSatoshi
-
-	// RoutingFeePaid is the routing fee paid in millisatoshis.
-	RoutingFeePaid lnwire.MilliSatoshi
-}
 
 // BackendInfo contains information about the Lightning backend.
 type BackendInfo struct {
@@ -47,7 +34,7 @@ type Backend interface {
 	// PayInvoice pays the given BOLT11 invoice within the specified timeout.
 	// maxFeeSat is the maximum routing fee in satoshis that will be paid.
 	PayInvoice(ctx context.Context, invoice string, maxFeeSat int64,
-		timeout time.Duration) (*PaymentResult, error)
+		timeout time.Duration) (*l402.PaymentResult, error)
 
 	// GetInfo returns basic information about the Lightning backend.
 	GetInfo(ctx context.Context) (*BackendInfo, error)

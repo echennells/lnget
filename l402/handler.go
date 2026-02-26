@@ -2,8 +2,10 @@ package l402
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/lightningnetwork/lnd/lntypes"
@@ -29,6 +31,24 @@ type Payer interface {
 		timeout time.Duration) (*PaymentResult, error)
 }
 
+// EventLogger is the interface for recording L402 payment events.
+// Implementations must be safe for concurrent use. Record methods return
+// the inserted event ID so callers can enrich the exact event later,
+// avoiding TOCTOU races with ORDER BY created_at.
+type EventLogger interface {
+	// RecordPaymentSuccess records a successful payment event and
+	// returns the event ID.
+	RecordPaymentSuccess(ctx context.Context, domain, url,
+		paymentHash string, amountSat, feeSat,
+		durationMs int64) (int64, error)
+
+	// RecordPaymentFailure records a failed payment event and
+	// returns the event ID.
+	RecordPaymentFailure(ctx context.Context, domain, url,
+		paymentHash string, amountSat int64, errMsg string,
+		durationMs int64) (int64, error)
+}
+
 // Handler manages L402 challenge detection and payment coordination.
 type Handler struct {
 	// store is the per-domain token store.
@@ -45,6 +65,15 @@ type Handler struct {
 
 	// paymentTimeout is the timeout for invoice payment.
 	paymentTimeout time.Duration
+
+	// eventLogger is the optional event logger. Nil means no logging.
+	eventLogger EventLogger
+
+	// lastEventID is the ID of the most recently recorded event.
+	// Used by the transport layer to enrich the exact event.
+	// Accessed atomically since HandleChallenge and LastEventID
+	// may be called from different goroutines.
+	lastEventID atomic.Int64
 }
 
 // HandlerConfig contains configuration for the L402 handler.
@@ -63,6 +92,9 @@ type HandlerConfig struct {
 
 	// PaymentTimeout is the timeout for invoice payment.
 	PaymentTimeout time.Duration
+
+	// EventLogger is the optional event logger. Nil disables logging.
+	EventLogger EventLogger
 }
 
 // NewHandler creates a new L402 handler.
@@ -73,6 +105,7 @@ func NewHandler(cfg *HandlerConfig) *Handler {
 		maxCostSat:     cfg.MaxCostSat,
 		maxFeeSat:      cfg.MaxFeeSat,
 		paymentTimeout: cfg.PaymentTimeout,
+		eventLogger:    cfg.EventLogger,
 	}
 }
 
@@ -149,18 +182,36 @@ func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 
 	log.Debugf("Stored pending token for %s", domain)
 
-	// Create a context with timeout for payment.
-	payCtx, cancel := context.WithTimeout(ctx, h.paymentTimeout)
-	defer cancel()
+	payHash := hex.EncodeToString(challenge.PaymentHash[:])
+	startTime := time.Now()
 
-	// Pay the invoice.
+	// Pay the invoice. The PayInvoice implementation manages its own
+	// timeout using the paymentTimeout parameter, so no additional
+	// context.WithTimeout wrapper is needed here.
 	log.Infof("Paying invoice for %s (max_fee=%d sats, timeout=%v)",
 		domain, h.maxFeeSat, h.paymentTimeout)
 
-	result, err := h.payer.PayInvoice(payCtx, challenge.Invoice,
+	result, err := h.payer.PayInvoice(ctx, challenge.Invoice,
 		h.maxFeeSat, h.paymentTimeout)
 	if err != nil {
 		log.Warnf("Payment failed for %s: %v", domain, err)
+
+		durationMs := time.Since(startTime).Milliseconds()
+
+		// Record failure event if logger is available.
+		if h.eventLogger != nil {
+			eventID, logErr := h.eventLogger.RecordPaymentFailure(
+				ctx, domain, "", payHash,
+				challenge.InvoiceAmount, err.Error(),
+				durationMs,
+			)
+			if logErr != nil {
+				log.Warnf("Failed to record "+
+					"payment failure event: %v", logErr)
+			} else {
+				h.lastEventID.Store(eventID)
+			}
+		}
 
 		// Payment failed, but keep the pending token for potential
 		// retry tracking.
@@ -170,6 +221,24 @@ func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 	log.Infof("Payment succeeded for %s: preimage=%x, amount=%v, "+
 		"fee=%v", domain, result.Preimage[:8],
 		result.AmountPaid, result.RoutingFeePaid)
+
+	durationMs := time.Since(startTime).Milliseconds()
+	amountSat := int64(result.AmountPaid.ToSatoshis())
+	feeSat := int64(result.RoutingFeePaid.ToSatoshis())
+
+	// Record success event if logger is available.
+	if h.eventLogger != nil {
+		eventID, logErr := h.eventLogger.RecordPaymentSuccess(
+			ctx, domain, "", payHash, amountSat, feeSat,
+			durationMs,
+		)
+		if logErr != nil {
+			log.Warnf("Failed to record "+
+				"payment success event: %v", logErr)
+		} else {
+			h.lastEventID.Store(eventID)
+		}
+	}
 
 	// Update the token with the payment result.
 	token.Preimage = result.Preimage
@@ -202,6 +271,13 @@ func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 // re-discovering the stale token.
 func (h *Handler) InvalidateToken(domain string) error {
 	return h.store.RemoveToken(domain)
+}
+
+// LastEventID returns the ID of the most recently recorded event.
+// This is used by the transport layer to enrich the exact event with
+// HTTP response metadata, avoiding TOCTOU races.
+func (h *Handler) LastEventID() int64 {
+	return h.lastEventID.Load()
 }
 
 // HasPendingPayment checks if there's a pending payment for a domain.

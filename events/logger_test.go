@@ -13,8 +13,9 @@ func TestRecordPaymentSuccessReturnsID(t *testing.T) {
 	store := newTestStore(t)
 	logger := NewLogger(store)
 
+	ctx := context.Background()
 	id, err := logger.RecordPaymentSuccess(
-		"example.com", "https://example.com/api",
+		ctx, "example.com", "https://example.com/api",
 		"hash123", 500, 3, 120,
 	)
 	require.NoError(t, err)
@@ -44,8 +45,9 @@ func TestRecordPaymentFailureReturnsID(t *testing.T) {
 	store := newTestStore(t)
 	logger := NewLogger(store)
 
+	ctx := context.Background()
 	id, err := logger.RecordPaymentFailure(
-		"pay.example.com", "https://pay.example.com/invoice",
+		ctx, "pay.example.com", "https://pay.example.com/invoice",
 		"hash456", 1000, "invoice expired", 250,
 	)
 	require.NoError(t, err)
@@ -76,16 +78,18 @@ func TestLoggerEnrichEventUpdatesViaStore(t *testing.T) {
 	store := newTestStore(t)
 	logger := NewLogger(store)
 
+	ctx := context.Background()
+
 	// Record a payment first so we have an event ID to enrich.
 	id, err := logger.RecordPaymentSuccess(
-		"api.example.com", "https://api.example.com/data",
+		ctx, "api.example.com", "https://api.example.com/data",
 		"hash789", 300, 5, 80,
 	)
 	require.NoError(t, err)
 
 	// Enrich the event with HTTP response metadata.
 	err = logger.EnrichEvent(
-		id, "https://api.example.com/data", "GET",
+		ctx, id, "https://api.example.com/data", "GET",
 		"application/octet-stream", 8192, 200,
 	)
 	require.NoError(t, err)
@@ -112,18 +116,20 @@ func TestLoggerMultipleEvents(t *testing.T) {
 	store := newTestStore(t)
 	logger := NewLogger(store)
 
+	ctx := context.Background()
+
 	id1, err := logger.RecordPaymentSuccess(
-		"a.com", "https://a.com/1", "h1", 10, 1, 50,
+		ctx, "a.com", "https://a.com/1", "h1", 10, 1, 50,
 	)
 	require.NoError(t, err)
 
 	id2, err := logger.RecordPaymentFailure(
-		"b.com", "https://b.com/2", "h2", 20, "no route", 60,
+		ctx, "b.com", "https://b.com/2", "h2", 20, "no route", 60,
 	)
 	require.NoError(t, err)
 
 	id3, err := logger.RecordPaymentSuccess(
-		"a.com", "https://a.com/3", "h3", 30, 2, 70,
+		ctx, "a.com", "https://a.com/3", "h3", 30, 2, 70,
 	)
 	require.NoError(t, err)
 

@@ -11,6 +11,7 @@ func TestSanitizeDomain(t *testing.T) {
 		name     string
 		input    string
 		expected string
+		wantErr  bool
 	}{
 		{
 			name:     "simple domain",
@@ -28,9 +29,19 @@ func TestSanitizeDomain(t *testing.T) {
 			expected: "api.example.com",
 		},
 		{
-			name:     "domain with path traversal attempt",
+			name:     "path traversal attempt sanitized",
 			input:    "../etc/passwd",
 			expected: "..etcpasswd",
+		},
+		{
+			name:    "bare dot-dot",
+			input:   "..",
+			wantErr: true,
+		},
+		{
+			name:    "bare dot",
+			input:   ".",
+			wantErr: true,
 		},
 		{
 			name:     "domain with special chars",
@@ -38,9 +49,9 @@ func TestSanitizeDomain(t *testing.T) {
 			expected: "testdomain.com",
 		},
 		{
-			name:     "empty domain",
-			input:    "",
-			expected: "",
+			name:    "empty domain",
+			input:   "",
+			wantErr: true,
 		},
 		{
 			name:     "domain with underscore",
@@ -56,7 +67,22 @@ func TestSanitizeDomain(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := SanitizeDomain(tc.input)
+			result, err := SanitizeDomain(tc.input)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("SanitizeDomain(%q) = %q, "+
+						"want error", tc.input, result)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("SanitizeDomain(%q) unexpected "+
+					"error: %v", tc.input, err)
+			}
+
 			if result != tc.expected {
 				t.Errorf("SanitizeDomain(%q) = %q, want %q",
 					tc.input, result, tc.expected)
@@ -67,6 +93,8 @@ func TestSanitizeDomain(t *testing.T) {
 
 // TestGetOriginalDomain tests domain recovery from sanitized form.
 func TestGetOriginalDomain(t *testing.T) {
+	baseDir := t.TempDir()
+
 	tests := []struct {
 		name      string
 		sanitized string
@@ -91,7 +119,7 @@ func TestGetOriginalDomain(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result := GetOriginalDomain(tc.sanitized)
+			result := GetOriginalDomain(baseDir, tc.sanitized)
 			if result != tc.expected {
 				t.Errorf("GetOriginalDomain(%q) = %q, want %q",
 					tc.sanitized, result, tc.expected)

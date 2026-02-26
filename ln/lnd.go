@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/lightninglabs/lndclient"
+	"github.com/lightninglabs/lnget/l402"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lntypes"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -83,7 +84,7 @@ func (l *LNDBackend) Stop() error {
 //
 //nolint:whitespace
 func (l *LNDBackend) PayInvoice(ctx context.Context, invoice string,
-	maxFeeSat int64, timeout time.Duration) (*PaymentResult, error) {
+	maxFeeSat int64, timeout time.Duration) (*l402.PaymentResult, error) {
 	if l.client == nil {
 		return nil, fmt.Errorf("lnd client not connected")
 	}
@@ -124,7 +125,7 @@ func (l *LNDBackend) PayInvoice(ctx context.Context, invoice string,
 						"preimage: %w", err)
 				}
 
-				return &PaymentResult{
+				return &l402.PaymentResult{
 					Preimage:       preimage,
 					AmountPaid:     payReq.Value,
 					RoutingFeePaid: status.Fee,

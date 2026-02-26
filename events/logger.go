@@ -19,10 +19,10 @@ func NewLogger(store *Store) *Logger {
 
 // RecordPaymentSuccess records a successful payment event and returns
 // the event ID.
-func (l *Logger) RecordPaymentSuccess(domain, url, paymentHash string,
-	amountSat, feeSat, durationMs int64) (int64, error) {
+func (l *Logger) RecordPaymentSuccess(ctx context.Context, domain, url,
+	paymentHash string, amountSat, feeSat, durationMs int64) (int64, error) {
 
-	return l.store.RecordEvent(context.Background(), &Event{
+	return l.store.RecordEvent(ctx, &Event{
 		Domain:      domain,
 		URL:         url,
 		PaymentHash: paymentHash,
@@ -36,10 +36,11 @@ func (l *Logger) RecordPaymentSuccess(domain, url, paymentHash string,
 
 // RecordPaymentFailure records a failed payment event and returns the
 // event ID.
-func (l *Logger) RecordPaymentFailure(domain, url, paymentHash string,
-	amountSat int64, errMsg string, durationMs int64) (int64, error) {
+func (l *Logger) RecordPaymentFailure(ctx context.Context, domain, url,
+	paymentHash string, amountSat int64, errMsg string,
+	durationMs int64) (int64, error) {
 
-	return l.store.RecordEvent(context.Background(), &Event{
+	return l.store.RecordEvent(ctx, &Event{
 		Domain:       domain,
 		URL:          url,
 		PaymentHash:  paymentHash,
@@ -55,11 +56,11 @@ func (l *Logger) RecordPaymentFailure(domain, url, paymentHash string,
 // metadata. This is called from the transport layer after the retry
 // request completes. Using the event ID directly avoids TOCTOU races
 // with ORDER BY created_at.
-func (l *Logger) EnrichEvent(id int64, url, method, contentType string,
-	responseSize int64, statusCode int) error {
+func (l *Logger) EnrichEvent(ctx context.Context, id int64, url, method,
+	contentType string, responseSize int64, statusCode int) error {
 
 	return l.store.EnrichEvent(
-		context.Background(), id, url, method, contentType,
+		ctx, id, url, method, contentType,
 		responseSize, statusCode,
 	)
 }

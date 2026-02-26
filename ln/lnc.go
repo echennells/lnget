@@ -11,6 +11,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/lightninglabs/lightning-node-connect/mailbox"
+	"github.com/lightninglabs/lnget/l402"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
@@ -402,7 +403,7 @@ func (l *LNCBackend) Stop() error {
 //
 //nolint:whitespace
 func (l *LNCBackend) PayInvoice(ctx context.Context, invoice string,
-	maxFeeSat int64, timeout time.Duration) (*PaymentResult, error) {
+	maxFeeSat int64, timeout time.Duration) (*l402.PaymentResult, error) {
 	l.mu.RLock()
 
 	if !l.started {
@@ -457,7 +458,7 @@ func (l *LNCBackend) PayInvoice(ctx context.Context, invoice string,
 					err)
 			}
 
-			return &PaymentResult{
+			return &l402.PaymentResult{
 				Preimage: preimage,
 				AmountPaid: lnwire.MilliSatoshi(
 					update.ValueMsat,

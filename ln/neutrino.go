@@ -15,6 +15,7 @@ import (
 	"github.com/btcsuite/btcwallet/wallet"
 	"github.com/btcsuite/btcwallet/walletdb"
 	_ "github.com/btcsuite/btcwallet/walletdb/bdb" // Register bdb driver.
+	"github.com/lightninglabs/lnget/l402"
 	"github.com/lightninglabs/neutrino"
 )
 
@@ -262,7 +263,7 @@ func (n *NeutrinoBackend) Stop() error {
 // supports on-chain operations. For Lightning payments, use lnd or LNC backend.
 func (n *NeutrinoBackend) PayInvoice(ctx context.Context, invoice string,
 	maxFeeSat int64, timeout time.Duration,
-) (*PaymentResult, error) {
+) (*l402.PaymentResult, error) {
 	// Neutrino backend does not support Lightning payments directly.
 	// It's primarily for receiving funds on-chain to later open channels.
 	// For actual Lightning payments, users should use lnd or LNC.

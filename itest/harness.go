@@ -242,7 +242,7 @@ func NewMockLNBackend() *MockLNBackend {
 // PayInvoice implements the ln.Backend interface. It simulates paying an
 // invoice and returns a preimage.
 func (m *MockLNBackend) PayInvoice(ctx context.Context, invoice string,
-	maxFeeSat int64, timeout time.Duration) (*ln.PaymentResult, error) {
+	maxFeeSat int64, timeout time.Duration) (*l402.PaymentResult, error) {
 
 	// Track the payment.
 	m.Payments = append(m.Payments, Payment{
@@ -257,7 +257,7 @@ func (m *MockLNBackend) PayInvoice(ctx context.Context, invoice string,
 			return nil, result.Err
 		}
 
-		return &ln.PaymentResult{
+		return &l402.PaymentResult{
 			Preimage:       result.Preimage,
 			AmountPaid:     lnwire.MilliSatoshi(100000), // 100 sats.
 			RoutingFeePaid: lnwire.MilliSatoshi(1000),   // 1 sat fee.
@@ -265,7 +265,7 @@ func (m *MockLNBackend) PayInvoice(ctx context.Context, invoice string,
 	}
 
 	// Return default success.
-	return &ln.PaymentResult{
+	return &l402.PaymentResult{
 		Preimage:       m.DefaultPreimage,
 		AmountPaid:     lnwire.MilliSatoshi(100000),
 		RoutingFeePaid: lnwire.MilliSatoshi(1000),
