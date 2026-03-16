@@ -92,6 +92,7 @@ func NewTokenFromChallenge(macBytes []byte,
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
+
 	defer func() {
 		_ = os.RemoveAll(tmpDir)
 	}()
