@@ -23,6 +23,37 @@ const (
 	HeaderWWWAuthenticate = "WWW-Authenticate"
 )
 
+// AuthPrefix represents the authentication scheme prefix used in the
+// L402 protocol's HTTP headers. The protocol was renamed from LSAT to
+// L402 in 2023, so both prefixes exist in the wild.
+type AuthPrefix string
+
+const (
+	// AuthPrefixL402 is the current protocol prefix per the L402 spec.
+	AuthPrefixL402 AuthPrefix = "L402"
+
+	// AuthPrefixLSAT is the legacy prefix from the original LSAT spec.
+	AuthPrefixLSAT AuthPrefix = "LSAT"
+)
+
+// String returns the string representation of the auth prefix.
+func (p AuthPrefix) String() string {
+	return string(p)
+}
+
+// ParseAuthPrefix converts a raw prefix string (from a WWW-Authenticate
+// header) into a typed AuthPrefix. Matching is case-insensitive. Returns
+// AuthPrefixL402 as the default for unrecognized prefixes.
+func ParseAuthPrefix(raw string) AuthPrefix {
+	switch strings.ToUpper(raw) {
+	case string(AuthPrefixLSAT):
+		return AuthPrefixLSAT
+
+	default:
+		return AuthPrefixL402
+	}
+}
+
 var (
 	// challengeRegex parses the L402/LSAT challenge from the
 	// WWW-Authenticate header.
@@ -44,6 +75,11 @@ type Challenge struct {
 
 	// InvoiceAmount is the invoice amount in satoshis (if decodable).
 	InvoiceAmount int64
+
+	// Prefix is the authentication scheme prefix the server used in
+	// the WWW-Authenticate header. We mirror this in the outbound
+	// Authorization header for maximum compatibility.
+	Prefix AuthPrefix
 }
 
 // ParseChallenge parses the WWW-Authenticate header to extract the L402
@@ -89,12 +125,17 @@ func ParseChallenge(header string) (*Challenge, error) {
 		Invoice:       invoice,
 		PaymentHash:   id.PaymentHash,
 		InvoiceAmount: amountSat,
+		Prefix:        ParseAuthPrefix(matches[1]),
 	}, nil
 }
 
-// SetHeader sets the L402 Authorization header on the request using aperture's
-// SetHeader function.
-func SetHeader(header *http.Header, token *Token) error {
+// SetHeader sets the Authorization header on the request, mirroring the
+// prefix the server used in its WWW-Authenticate challenge. If the server
+// sent "L402", we respond with "L402"; if it sent "LSAT", we respond with
+// "LSAT". This ensures compatibility with both newer L402-only servers and
+// older LSAT-only servers. When prefix is empty (e.g. for cached tokens
+// where the original challenge prefix is unknown), we default to "L402".
+func SetHeader(header *http.Header, token *Token, prefix AuthPrefix) error {
 	if IsPending(token) {
 		return fmt.Errorf("cannot set header with pending token")
 	}
@@ -104,7 +145,23 @@ func SetHeader(header *http.Header, token *Token) error {
 		return fmt.Errorf("failed to get paid macaroon: %w", err)
 	}
 
-	return l402.SetHeader(header, mac, token.Preimage)
+	err = l402.SetHeader(header, mac, token.Preimage)
+	if err != nil {
+		return err
+	}
+
+	// Aperture's SetHeader always uses "LSAT". Replace the prefix
+	// with whatever the server used in its challenge header so we
+	// mirror their protocol version choice.
+	val := header.Get(HeaderAuthorization)
+	if strings.HasPrefix(val, "LSAT ") {
+		header.Set(
+			HeaderAuthorization,
+			prefix.String()+val[4:],
+		)
+	}
+
+	return nil
 }
 
 var (
