@@ -463,7 +463,7 @@ func TestYAMLRoundTrip(t *testing.T) {
 // regressions where a new field is added with mapstructure but without
 // the corresponding yaml tag.
 func TestYAMLKeysMatchMapstructure(t *testing.T) {
-	checkTags(t, reflect.TypeOf(Config{}), "")
+	checkTags(t, reflect.TypeFor[Config](), "")
 }
 
 // checkTags recursively verifies that mapstructure and yaml tags match
@@ -477,6 +477,7 @@ func checkTags(t *testing.T, typ reflect.Type, prefix string) {
 		ym := field.Tag.Get("yaml")
 
 		fullName := prefix + field.Name
+
 		if ms == "" {
 			continue
 		}
