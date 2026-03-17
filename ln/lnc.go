@@ -138,6 +138,8 @@ func (l *LNCBackend) Start(ctx context.Context) error {
 		return errors.New("LNC backend already started")
 	}
 
+	log.Infof("Starting LNC connection to mailbox %s", l.mailboxAddr)
+
 	// Create the websocket connection using the pairing phrase.
 	getStatus, getConn, err := mailbox.NewClientWebsocketConn(
 		l.mailboxAddr,
@@ -145,27 +147,39 @@ func (l *LNCBackend) Start(ctx context.Context) error {
 		l.localKey,
 		l.remoteKey,
 		func(key *btcec.PublicKey) error {
+			log.Infof("Received remote key: %x",
+				key.SerializeCompressed())
+
 			l.remoteKey = key
 
 			return nil
 		},
 		func(data []byte) error {
-			// Handle auth data if needed.
+			log.Debugf("Received auth data (%d bytes)", len(data))
+
 			return nil
 		},
 	)
 	if err != nil {
+		log.Warnf("LNC websocket creation failed: %v", err)
+
 		return fmt.Errorf("failed to create LNC connection: %w", err)
 	}
 
 	l.getStatus = getStatus
 	l.getConn = getConn
 
+	log.Infof("LNC websocket created, establishing gRPC connection...")
+
 	// Get the gRPC connection.
 	conn, err := getConn()
 	if err != nil {
+		log.Warnf("gRPC connection failed: %v", err)
+
 		return fmt.Errorf("failed to get gRPC connection: %w", err)
 	}
+
+	log.Infof("gRPC connection established")
 
 	l.grpcConn = conn
 
@@ -186,13 +200,15 @@ func (l *LNCBackend) Start(ctx context.Context) error {
 
 		saveErr := l.sessionStore.SaveSession(l.session)
 		if saveErr != nil {
-			// Log but don't fail on session save error.
-			fmt.Printf("warning: failed to save session: %v\n",
-				saveErr)
+			log.Warnf("Failed to save session: %v", saveErr)
+		} else {
+			log.Infof("Session saved: %s", l.session.ID)
 		}
 	}
 
 	l.started = true
+
+	log.Infof("LNC backend started successfully")
 
 	return nil
 }
@@ -244,9 +260,14 @@ func (l *LNCBackend) PayInvoice(ctx context.Context, invoice string,
 		TimeoutSeconds: int32(timeout.Seconds()),
 	}
 
+	log.Infof("Sending payment via LNC (fee_limit=%d sat, timeout=%v)",
+		maxFeeSat, timeout)
+
 	// Send the payment using the router client for better control.
 	stream, err := routerClient.SendPaymentV2(payCtx, req)
 	if err != nil {
+		log.Warnf("Payment initiation failed: %v", err)
+
 		return nil, fmt.Errorf("failed to send payment: %w", err)
 	}
 
@@ -254,8 +275,12 @@ func (l *LNCBackend) PayInvoice(ctx context.Context, invoice string,
 	for {
 		update, err := stream.Recv()
 		if err != nil {
+			log.Warnf("Payment stream error: %v", err)
+
 			return nil, fmt.Errorf("payment stream error: %w", err)
 		}
+
+		log.Debugf("Payment status update: %s", update.Status)
 
 		switch update.Status {
 		case lnrpc.Payment_SUCCEEDED:
