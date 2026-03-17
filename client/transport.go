@@ -65,8 +65,12 @@ func (t *L402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		// Clone the request to avoid modifying the original.
 		reqWithToken := req.Clone(req.Context())
 
-		// Attach the token to the request.
-		err = l402.SetHeader(&reqWithToken.Header, token)
+		// Attach the token to the request. For cached tokens we
+		// don't know the server's original prefix, so we default
+		// to L402 per the current spec.
+		err = l402.SetHeader(
+			&reqWithToken.Header, token, l402.AuthPrefixL402,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to set L402 header: %w",
 				err)
@@ -137,30 +141,35 @@ func (t *L402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Double-check if another request already paid for this domain.
 	token, err = t.Handler.GetTokenForDomain(domain)
 	if err == nil {
-		// Another request paid, use the token.
-		return t.retryWithToken(req, token)
+		// Another request paid, use the token. We default to L402
+		// since we don't have the original challenge prefix here.
+		return t.retryWithToken(req, token, l402.AuthPrefixL402)
 	}
 
-	// Pay the invoice and get the token.
-	token, err = t.Handler.HandleChallenge(
+	// Pay the invoice and get the token. HandleChallenge also
+	// returns the prefix the server used in its challenge header.
+	token, prefix, err := t.Handler.HandleChallenge(
 		req.Context(), challengeResp, domain,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("L402 payment failed: %w", err)
 	}
 
-	// Retry the request with the paid token.
-	return t.retryWithToken(req, token)
+	// Retry the request with the paid token, mirroring the server's
+	// prefix choice.
+	return t.retryWithToken(req, token, prefix)
 }
 
-// retryWithToken clones the request and adds the L402 token.
+// retryWithToken clones the request and adds the L402 token with the
+// given auth prefix.
 //
-//nolint:whitespace
+//nolint:whitespace,wsl_v5
 func (t *L402Transport) retryWithToken(req *http.Request,
-	token *l402.Token) (*http.Response, error) {
+	token *l402.Token, prefix l402.AuthPrefix) (*http.Response, error) {
+
 	reqWithToken := req.Clone(req.Context())
 
-	err := l402.SetHeader(&reqWithToken.Header, token)
+	err := l402.SetHeader(&reqWithToken.Header, token, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to set L402 header: %w", err)
 	}

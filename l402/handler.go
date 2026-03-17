@@ -92,21 +92,24 @@ func (h *Handler) GetTokenForDomain(domain string) (*Token, error) {
 }
 
 // HandleChallenge processes an L402 challenge response and pays the invoice.
+// It returns the paid token and the auth prefix the server used in its
+// challenge, so the caller can mirror it in the Authorization header.
 func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
-	domain string) (*Token, error) {
+	domain string) (*Token, AuthPrefix, error) {
 	// Parse the challenge from the response.
 	authHeader := resp.Header.Get(HeaderWWWAuthenticate)
 
 	challenge, err := ParseChallenge(authHeader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse L402 challenge: %w",
-			err)
+		return nil, "", fmt.Errorf("failed to parse L402 challenge: "+
+			"%w", err)
 	}
 
 	// Check if the invoice amount exceeds our maximum (if we know it).
 	if challenge.InvoiceAmount > 0 && challenge.InvoiceAmount > h.maxCostSat {
-		return nil, fmt.Errorf("invoice amount %d sats exceeds "+
-			"maximum %d sats", challenge.InvoiceAmount, h.maxCostSat)
+		return nil, "", fmt.Errorf("invoice amount %d sats exceeds "+
+			"maximum %d sats", challenge.InvoiceAmount,
+			h.maxCostSat)
 	}
 
 	// Create a pending token with the base macaroon properly set.
@@ -116,14 +119,15 @@ func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 		challenge.Macaroon, challenge.PaymentHash,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create token from "+
+		return nil, "", fmt.Errorf("failed to create token from "+
 			"challenge: %w", err)
 	}
 
 	// Store the pending token before payment to handle interruptions.
 	err = h.store.StorePending(domain, token)
 	if err != nil {
-		return nil, fmt.Errorf("failed to store pending token: %w", err)
+		return nil, "", fmt.Errorf("failed to store pending "+
+			"token: %w", err)
 	}
 
 	// Create a context with timeout for payment.
@@ -136,7 +140,7 @@ func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 	if err != nil {
 		// Payment failed, but keep the pending token for potential
 		// retry tracking.
-		return nil, fmt.Errorf("payment failed: %w", err)
+		return nil, "", fmt.Errorf("payment failed: %w", err)
 	}
 
 	// Update the token with the payment result.
@@ -149,12 +153,12 @@ func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 	if err != nil {
 		// This is a serious error - we paid but couldn't store the
 		// token. Log the preimage so the user can recover.
-		return nil, fmt.Errorf("CRITICAL: payment succeeded but "+
-			"failed to store token. Preimage: %s. Error: %w",
+		return nil, "", fmt.Errorf("CRITICAL: payment succeeded "+
+			"but failed to store token. Preimage: %s. Error: %w",
 			result.Preimage.String(), err)
 	}
 
-	return token, nil
+	return token, challenge.Prefix, nil
 }
 
 // InvalidateToken removes a cached token for a domain. This is called
