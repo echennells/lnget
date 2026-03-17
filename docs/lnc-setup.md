@@ -41,8 +41,24 @@ If you run [Lightning Terminal](https://github.com/lightninglabs/lightning-termi
    - Set permissions (read + send for lnget)
    - Copy the pairing phrase
 
-3. **Pair with lnget**:
+3. **Pair with lnget** (use `--stdin` to avoid leaking the phrase
+   into shell history):
    ```bash
+   # Option A: Secure terminal prompt (recommended).
+   # Prompts with echo disabled, like a password input.
+   lnget ln lnc pair --stdin
+
+   # Option B: Pipe from a secrets manager or file.
+   # Note: plain 'echo' still lands in history; use a secrets
+   # manager in practice.
+   pass show lnc/pairing-phrase | lnget ln lnc pair --stdin
+
+   # Option C: Environment variable.
+   read -s LNGET_LN_LNC_PAIRING_PHRASE
+   export LNGET_LN_LNC_PAIRING_PHRASE
+   lnget ln lnc pair
+
+   # Option D: Positional argument (visible in history/ps).
    lnget ln lnc pair "your-pairing-phrase-here"
    ```
 
@@ -75,9 +91,10 @@ If running lnd separately with litd:
    # Copy the pairing phrase
    ```
 
-3. **Pair with lnget**:
+3. **Pair with lnget** (use `--stdin` for a secure password-style
+   prompt that keeps the phrase out of shell history):
    ```bash
-   lnget ln lnc pair "pairing-phrase"
+   lnget ln lnc pair --stdin
    ```
 
 ## Pairing Process
@@ -90,7 +107,7 @@ When you run `lnget ln lnc pair`:
 4. Stores session credentials locally at `~/.lnget/lnc/`
 
 ```bash
-$ lnget ln lnc pair "flexible hammer potato..."
+$ echo "flexible hammer potato..." | lnget ln lnc pair --stdin
 Connecting to Lightning Terminal...
 Pairing successful!
 Session stored: ~/.lnget/lnc/session.json
@@ -154,6 +171,9 @@ Create a new session and pair again.
 - **Relay trust**: The relay (Lightning Terminal) sees metadata but not content
 - **Session file security**: `~/.lnget/lnc/session.json` grants access—protect it
 - **Permission scope**: Sessions have permissions; create minimal-permission sessions
+- **Pairing phrase exposure**: Use `--stdin` or the env var instead of passing
+  the phrase as a CLI argument, which would be visible in shell history and
+  `ps` output
 
 ### Recommended permissions for lnget
 
@@ -188,6 +208,9 @@ ln:
 ```bash
 export LNGET_LN_MODE=lnc
 export LNGET_LN_LNC_SESSION_PATH=~/.lnget/lnc/session.json
+
+# Pairing phrase via env var (avoids shell history).
+export LNGET_LN_LNC_PAIRING_PHRASE="your phrase here"
 ```
 
 ## Troubleshooting
@@ -200,7 +223,7 @@ Error: LNC session not found at ~/.lnget/lnc/session.json
 
 **Fix**: Pair first:
 ```bash
-lnget ln lnc pair "your-pairing-phrase"
+lnget ln lnc pair --stdin
 ```
 
 ### "session expired"
@@ -239,7 +262,7 @@ Error: LNC authentication failed
 # Remove local session
 rm ~/.lnget/lnc/session.json
 # Re-pair with new phrase
-lnget ln lnc pair "new-pairing-phrase"
+lnget ln lnc pair --stdin
 ```
 
 ### Slow connection
