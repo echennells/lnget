@@ -2,6 +2,7 @@ package ln
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -100,30 +101,81 @@ func NewLNCBackend(cfg *LNCConfig) (*LNCBackend, error) {
 		mailboxAddr = DefaultMailboxAddr
 	}
 
-	// Ensure the mailbox address is properly formatted.
-	if !strings.Contains(mailboxAddr, "://") {
-		mailboxAddr = "wss://" + mailboxAddr
+	// Strip any scheme prefix. The LNC library's websocket
+	// transport adds "wss://" itself in the address format string,
+	// so we must pass a bare host:port.
+	mailboxAddr = strings.TrimPrefix(mailboxAddr, "wss://")
+	mailboxAddr = strings.TrimPrefix(mailboxAddr, "ws://")
+
+	// If no local key was provided, generate a fresh one for the
+	// Noise handshake. The LNC library requires a non-nil local
+	// static key.
+	localKey := cfg.LocalKey
+	if localKey == nil {
+		privKey, err := btcec.NewPrivateKey()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate LNC "+
+				"key: %w", err)
+		}
+
+		localKey = &keychain.PrivKeyECDH{PrivKey: privKey}
 	}
+
+	var remoteKey *btcec.PublicKey
 
 	backend := &LNCBackend{
 		pairingPhrase: cfg.PairingPhrase,
 		mailboxAddr:   mailboxAddr,
 		sessionStore:  cfg.SessionStore,
 		ephemeral:     cfg.Ephemeral,
-		localKey:      cfg.LocalKey,
+		localKey:      localKey,
 		stopChan:      make(chan struct{}),
 	}
 
-	// If resuming an existing session, load it.
+	// If resuming an existing session, load it and restore the
+	// saved key material so we can reconnect without re-pairing.
 	if cfg.SessionID != "" && cfg.SessionStore != nil {
 		session, err := cfg.SessionStore.LoadSession(cfg.SessionID)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load session: %w", err)
+			return nil, fmt.Errorf("failed to load session: %w",
+				err)
 		}
 
 		backend.session = session
 		backend.pairingPhrase = session.PairingPhrase
-		backend.mailboxAddr = session.MailboxAddr
+		backend.mailboxAddr = strings.TrimPrefix(
+			session.MailboxAddr, "wss://",
+		)
+
+		// Restore the local private key from the session.
+		if session.LocalKey != "" {
+			keyBytes, err := hex.DecodeString(session.LocalKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode "+
+					"local key: %w", err)
+			}
+
+			privKey, _ := btcec.PrivKeyFromBytes(keyBytes)
+			localKey = &keychain.PrivKeyECDH{PrivKey: privKey}
+			backend.localKey = localKey
+		}
+
+		// Restore the remote public key from the session.
+		if session.RemoteKey != "" {
+			keyBytes, err := hex.DecodeString(session.RemoteKey)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode "+
+					"remote key: %w", err)
+			}
+
+			remoteKey, err = btcec.ParsePubKey(keyBytes)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse "+
+					"remote key: %w", err)
+			}
+
+			backend.remoteKey = remoteKey
+		}
 	}
 
 	return backend, nil
@@ -138,6 +190,8 @@ func (l *LNCBackend) Start(ctx context.Context) error {
 		return errors.New("LNC backend already started")
 	}
 
+	log.Infof("Starting LNC connection to mailbox %s", l.mailboxAddr)
+
 	// Create the websocket connection using the pairing phrase.
 	getStatus, getConn, err := mailbox.NewClientWebsocketConn(
 		l.mailboxAddr,
@@ -145,33 +199,148 @@ func (l *LNCBackend) Start(ctx context.Context) error {
 		l.localKey,
 		l.remoteKey,
 		func(key *btcec.PublicKey) error {
+			log.Infof("Received remote key: %x",
+				key.SerializeCompressed())
+
 			l.remoteKey = key
 
 			return nil
 		},
 		func(data []byte) error {
-			// Handle auth data if needed.
+			log.Debugf("Received auth data (%d bytes)", len(data))
+
 			return nil
 		},
 	)
 	if err != nil {
+		log.Warnf("LNC websocket creation failed: %v", err)
+
 		return fmt.Errorf("failed to create LNC connection: %w", err)
 	}
 
 	l.getStatus = getStatus
 	l.getConn = getConn
 
-	// Get the gRPC connection.
-	conn, err := getConn()
-	if err != nil {
-		return fmt.Errorf("failed to get gRPC connection: %w", err)
+	log.Infof("LNC websocket created, establishing gRPC connection...")
+
+	// Get the gRPC connection with a timeout and status polling.
+	// The getConn call blocks during the Noise handshake, so we
+	// run it in a goroutine and poll the status checker to detect
+	// early failures (bad phrase, expired session, etc.).
+	type connResult struct {
+		conn *grpc.ClientConn
+		err  error
 	}
+
+	connTimeout := 30 * time.Second
+	statusPoll := 500 * time.Millisecond
+
+	connCh := make(chan connResult, 1)
+
+	go func() {
+		c, e := getConn()
+		connCh <- connResult{conn: c, err: e}
+	}()
+
+	var conn *grpc.ClientConn
+
+	// Allow a grace period before treating SessionNotFound as
+	// fatal. During reconnection the relay may briefly report
+	// SessionNotFound before the handshake completes.
+	graceExpiry := time.Now().Add(5 * time.Second)
+
+	statusTicker := time.NewTicker(statusPoll)
+	defer statusTicker.Stop()
+
+	timeoutTimer := time.NewTimer(connTimeout)
+	defer timeoutTimer.Stop()
+
+	for {
+		select {
+		case res := <-connCh:
+			if res.err != nil {
+				log.Warnf("gRPC connection failed: %v",
+					res.err)
+
+				return fmt.Errorf("failed to get gRPC "+
+					"connection: %w", res.err)
+			}
+
+			conn = res.conn
+
+			goto connected
+
+		case <-statusTicker.C:
+			status := getStatus()
+			log.Debugf("LNC connection status: %s", status)
+
+			switch status {
+			case mailbox.ClientStatusSessionNotFound:
+				// During the grace period, SessionNotFound
+				// might be transient while the relay
+				// processes the reconnection.
+				if time.Now().Before(graceExpiry) {
+					log.Debugf("SessionNotFound during " +
+						"grace period, retrying...")
+
+					continue
+				}
+
+				return fmt.Errorf("LNC session not found " +
+					"(check pairing phrase or session " +
+					"may have expired)")
+
+			case mailbox.ClientStatusSessionInUse:
+				return fmt.Errorf("LNC session already " +
+					"in use by another client")
+
+			case mailbox.ClientStatusConnected:
+				// Connected, getConn should return soon.
+				log.Infof("LNC status: connected, " +
+					"waiting for gRPC channel...")
+
+			default:
+				// Still connecting.
+			}
+
+		case <-timeoutTimer.C:
+			log.Warnf("gRPC connection timed out after %v",
+				connTimeout)
+
+			return fmt.Errorf("LNC connection timed out "+
+				"after %v (check pairing phrase and "+
+				"network)", connTimeout)
+
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+connected:
+
+	log.Infof("gRPC connection established")
 
 	l.grpcConn = conn
 
 	// Create the Lightning and Router clients.
 	l.lnClient = lnrpc.NewLightningClient(conn)
 	l.routerClient = routerrpc.NewRouterClient(conn)
+
+	// Persist the local private key and remote public key so
+	// subsequent connections can reuse the same Noise identity.
+	localKeyHex := ""
+	if ecdh, ok := l.localKey.(*keychain.PrivKeyECDH); ok {
+		localKeyHex = hex.EncodeToString(
+			ecdh.PrivKey.Serialize(),
+		)
+	}
+
+	remoteKeyHex := ""
+	if l.remoteKey != nil {
+		remoteKeyHex = hex.EncodeToString(
+			l.remoteKey.SerializeCompressed(),
+		)
+	}
 
 	// Save the session if not ephemeral.
 	if !l.ephemeral && l.sessionStore != nil && l.session == nil {
@@ -180,19 +349,31 @@ func (l *LNCBackend) Start(ctx context.Context) error {
 			Label:         "lnget-session",
 			PairingPhrase: l.pairingPhrase,
 			MailboxAddr:   l.mailboxAddr,
+			LocalKey:      localKeyHex,
+			RemoteKey:     remoteKeyHex,
 			Created:       time.Now(),
 			LastUsed:      time.Now(),
 		}
 
 		saveErr := l.sessionStore.SaveSession(l.session)
 		if saveErr != nil {
-			// Log but don't fail on session save error.
-			fmt.Printf("warning: failed to save session: %v\n",
-				saveErr)
+			log.Warnf("Failed to save session: %v", saveErr)
+		} else {
+			log.Infof("Session saved: %s", l.session.ID)
 		}
+	} else if l.session != nil && l.sessionStore != nil {
+		// Update existing session with current keys and
+		// last-used time.
+		l.session.LocalKey = localKeyHex
+		l.session.RemoteKey = remoteKeyHex
+		l.session.LastUsed = time.Now()
+
+		_ = l.sessionStore.SaveSession(l.session)
 	}
 
 	l.started = true
+
+	log.Infof("LNC backend started successfully")
 
 	return nil
 }
@@ -244,9 +425,14 @@ func (l *LNCBackend) PayInvoice(ctx context.Context, invoice string,
 		TimeoutSeconds: int32(timeout.Seconds()),
 	}
 
+	log.Infof("Sending payment via LNC (fee_limit=%d sat, timeout=%v)",
+		maxFeeSat, timeout)
+
 	// Send the payment using the router client for better control.
 	stream, err := routerClient.SendPaymentV2(payCtx, req)
 	if err != nil {
+		log.Warnf("Payment initiation failed: %v", err)
+
 		return nil, fmt.Errorf("failed to send payment: %w", err)
 	}
 
@@ -254,8 +440,12 @@ func (l *LNCBackend) PayInvoice(ctx context.Context, invoice string,
 	for {
 		update, err := stream.Recv()
 		if err != nil {
+			log.Warnf("Payment stream error: %v", err)
+
 			return nil, fmt.Errorf("payment stream error: %w", err)
 		}
+
+		log.Debugf("Payment status update: %s", update.Status)
 
 		switch update.Status {
 		case lnrpc.Payment_SUCCEEDED:

@@ -70,6 +70,12 @@ var flags struct {
 	// Config file path.
 	configFile string
 
+	// Debug logging level.
+	debugLevel string
+
+	// Log file path.
+	logFile string
+
 	// Allow insecure connections.
 	insecure bool
 }
@@ -101,7 +107,10 @@ the existing token without additional payments.`,
   lnget -c https://api.example.com/large-file.zip`,
 		Version: build.Version(),
 		Args:    cobra.ExactArgs(1),
-		RunE:    runGet,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return initLogging()
+		},
+		RunE: runGet,
 	}
 
 	// wget/curl-like flags.
@@ -145,6 +154,11 @@ the existing token without additional payments.`,
 	// Config flags — persistent so subcommands inherit them.
 	cmd.PersistentFlags().StringVar(&flags.configFile, "config", "",
 		"Config file path")
+	cmd.PersistentFlags().StringVar(&flags.debugLevel, "debuglevel", "",
+		"Logging level: trace, debug, info, warn, error, "+
+			"or SUBSYS=LEVEL pairs (e.g. LNBK=debug,L402=trace)")
+	cmd.PersistentFlags().StringVar(&flags.logFile, "logfile", "",
+		"Log file path (default: ~/.lnget/lnget.log)")
 
 	// Security flags.
 	cmd.Flags().BoolVarP(&flags.insecure, "insecure", "k", false,
@@ -311,6 +325,8 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 // createBackend creates the appropriate Lightning backend based on config.
 func createBackend(cfg *config.Config) (ln.Backend, error) {
+	log.Infof("Creating LN backend: mode=%s", cfg.LN.Mode)
+
 	switch cfg.LN.Mode {
 	case config.LNModeLND:
 		return ln.NewLNDBackend(&ln.LNDConfig{
@@ -328,11 +344,34 @@ func createBackend(cfg *config.Config) (ln.Backend, error) {
 				err)
 		}
 
+		// If no explicit session ID or pairing phrase is configured,
+		// try to use the most recent saved session.
+		sessionID := cfg.LN.LNC.SessionID
+		pairingPhrase := cfg.LN.LNC.PairingPhrase
+
+		if sessionID == "" && pairingPhrase == "" {
+			sessions, listErr := sessionStore.ListSessions()
+			if listErr == nil && len(sessions) > 0 {
+				// Use the most recently created session.
+				latest := sessions[0]
+				for _, s := range sessions[1:] {
+					if s.Created.After(latest.Created) {
+						latest = s
+					}
+				}
+
+				sessionID = latest.ID
+
+				log.Infof("Using saved LNC session: %s",
+					sessionID)
+			}
+		}
+
 		return ln.NewLNCBackend(&ln.LNCConfig{
-			PairingPhrase: cfg.LN.LNC.PairingPhrase,
+			PairingPhrase: pairingPhrase,
 			MailboxAddr:   cfg.LN.LNC.MailboxAddr,
 			SessionStore:  sessionStore,
-			SessionID:     cfg.LN.LNC.SessionID,
+			SessionID:     sessionID,
 			Ephemeral:     cfg.LN.LNC.Ephemeral,
 		})
 
@@ -345,4 +384,39 @@ func createBackend(cfg *config.Config) (ln.Backend, error) {
 	default:
 		return nil, fmt.Errorf("unknown LN backend mode: %s", cfg.LN.Mode)
 	}
+}
+
+// initLogging sets up file-based logging. Logs are always written to
+// ~/.lnget/lnget.log (or --logfile) at info level by default. Use
+// --debuglevel to increase verbosity.
+func initLogging() error {
+	// Determine log file path.
+	logPath := flags.logFile
+	if logPath == "" {
+		logPath = filepath.Join(config.DefaultConfigDir(), "lnget.log")
+	}
+
+	// Ensure the parent directory exists.
+	logDir := filepath.Dir(logPath)
+
+	err := os.MkdirAll(logDir, 0700)
+	if err != nil {
+		return fmt.Errorf("failed to create log directory: %w", err)
+	}
+
+	// Open and configure the log file.
+	err = build.SetLogFile(logPath)
+	if err != nil {
+		return err
+	}
+
+	// If a custom debug level was provided, override the defaults.
+	if flags.debugLevel != "" {
+		err = build.ParseAndSetDebugLevels(flags.debugLevel)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

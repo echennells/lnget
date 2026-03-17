@@ -94,8 +94,13 @@ func (h *Handler) GetTokenForDomain(domain string) (*Token, error) {
 // HandleChallenge processes an L402 challenge response and pays the invoice.
 // It returns the paid token and the auth prefix the server used in its
 // challenge, so the caller can mirror it in the Authorization header.
+//
+//nolint:whitespace,wsl_v5
 func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 	domain string) (*Token, AuthPrefix, error) {
+
+	log.Infof("Handling L402 challenge for domain %s", domain)
+
 	// Parse the challenge from the response.
 	authHeader := resp.Header.Get(HeaderWWWAuthenticate)
 
@@ -105,8 +110,15 @@ func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 			"%w", err)
 	}
 
+	log.Infof("Parsed challenge: prefix=%s, invoice_amount=%d sats, "+
+		"payment_hash=%x", challenge.Prefix,
+		challenge.InvoiceAmount, challenge.PaymentHash[:8])
+
 	// Check if the invoice amount exceeds our maximum (if we know it).
 	if challenge.InvoiceAmount > 0 && challenge.InvoiceAmount > h.maxCostSat {
+		log.Warnf("Invoice amount %d sats exceeds max cost %d sats",
+			challenge.InvoiceAmount, h.maxCostSat)
+
 		return nil, "", fmt.Errorf("invoice amount %d sats exceeds "+
 			"maximum %d sats", challenge.InvoiceAmount,
 			h.maxCostSat)
@@ -123,25 +135,41 @@ func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 			"challenge: %w", err)
 	}
 
-	// Store the pending token before payment to handle interruptions.
+	// Remove any stale token (paid or pending) left by a previous
+	// failed attempt before storing the new pending token.
+	_ = h.store.RemoveToken(domain)
+
+	// Store the pending token before payment to handle
+	// interruptions.
 	err = h.store.StorePending(domain, token)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to store pending "+
 			"token: %w", err)
 	}
 
+	log.Debugf("Stored pending token for %s", domain)
+
 	// Create a context with timeout for payment.
 	payCtx, cancel := context.WithTimeout(ctx, h.paymentTimeout)
 	defer cancel()
 
 	// Pay the invoice.
+	log.Infof("Paying invoice for %s (max_fee=%d sats, timeout=%v)",
+		domain, h.maxFeeSat, h.paymentTimeout)
+
 	result, err := h.payer.PayInvoice(payCtx, challenge.Invoice,
 		h.maxFeeSat, h.paymentTimeout)
 	if err != nil {
+		log.Warnf("Payment failed for %s: %v", domain, err)
+
 		// Payment failed, but keep the pending token for potential
 		// retry tracking.
 		return nil, "", fmt.Errorf("payment failed: %w", err)
 	}
+
+	log.Infof("Payment succeeded for %s: preimage=%x, amount=%v, "+
+		"fee=%v", domain, result.Preimage[:8],
+		result.AmountPaid, result.RoutingFeePaid)
 
 	// Update the token with the payment result.
 	token.Preimage = result.Preimage
@@ -153,10 +181,16 @@ func (h *Handler) HandleChallenge(ctx context.Context, resp *http.Response,
 	if err != nil {
 		// This is a serious error - we paid but couldn't store the
 		// token. Log the preimage so the user can recover.
+		log.Errorf("CRITICAL: payment succeeded but token storage "+
+			"failed for %s, preimage=%s: %v",
+			domain, result.Preimage.String(), err)
+
 		return nil, "", fmt.Errorf("CRITICAL: payment succeeded "+
 			"but failed to store token. Preimage: %s. Error: %w",
 			result.Preimage.String(), err)
 	}
+
+	log.Infof("Token stored for %s", domain)
 
 	return token, challenge.Prefix, nil
 }

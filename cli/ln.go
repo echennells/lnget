@@ -1,14 +1,18 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/lightninglabs/lnget/client"
 	"github.com/lightninglabs/lnget/config"
 	"github.com/lightninglabs/lnget/ln"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // NewLNCmd creates the ln subcommand.
@@ -44,18 +48,38 @@ func newLNCCmd() *cobra.Command {
 
 // newLNCPairCmd creates the ln lnc pair subcommand.
 func newLNCPairCmd() *cobra.Command {
-	var ephemeral bool
+	var (
+		ephemeral bool
+		fromStdin bool
+	)
 
 	cmd := &cobra.Command{
-		Use:   "pair <pairing-phrase>",
+		Use:   "pair [pairing-phrase]",
 		Short: "Pair with a Lightning node",
 		Long: `Pair with a Lightning node using an LNC pairing phrase.
 
 The pairing phrase is typically generated in Lightning Terminal and
-consists of multiple words separated by spaces.`,
-		Args: cobra.ExactArgs(1),
+consists of multiple words separated by spaces.
+
+The phrase can be provided as a positional argument, via --stdin
+(reads one line from stdin), or via the LNGET_LN_LNC_PAIRING_PHRASE
+environment variable. Using --stdin or the env var avoids leaking
+the phrase into shell history and process listings.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			pairingPhrase := args[0]
+			log.Infof("Resolving pairing phrase (fromStdin=%v, "+
+				"nArgs=%d)", fromStdin, len(args))
+
+			pairingPhrase, err := resolvePairingPhrase(
+				args, fromStdin,
+				&stdinPhraseReader{}, os.Stderr,
+			)
+			if err != nil {
+				return err
+			}
+
+			log.Infof("Pairing phrase resolved (len=%d)",
+				len(pairingPhrase))
 
 			cfg, err := config.LoadConfig(flags.configFile)
 			if err != nil {
@@ -139,8 +163,120 @@ consists of multiple words separated by spaces.`,
 
 	cmd.Flags().BoolVar(&ephemeral, "ephemeral", false,
 		"Don't save the session for future use")
+	cmd.Flags().BoolVar(&fromStdin, "stdin", false,
+		"Read pairing phrase from stdin (avoids shell history)")
 
 	return cmd
+}
+
+// PhraseReader abstracts the I/O operations needed by
+// resolvePairingPhrase so that tests can inject mock implementations
+// without real terminal or stdin manipulation.
+type PhraseReader interface {
+	// IsTerminal reports whether stdin is an interactive terminal.
+	IsTerminal() bool
+
+	// ReadLine reads a single line of text from stdin. It is used
+	// when stdin is piped (non-terminal).
+	ReadLine() (string, error)
+
+	// ReadPassword reads input with echo disabled, like a password
+	// prompt. It is used when stdin is an interactive terminal.
+	ReadPassword() ([]byte, error)
+
+	// Getenv returns the value of the given environment variable.
+	Getenv(key string) string
+}
+
+// stdinPhraseReader is the production PhraseReader backed by os.Stdin
+// and golang.org/x/term.
+type stdinPhraseReader struct{}
+
+// IsTerminal reports whether stdin is an interactive terminal.
+func (s *stdinPhraseReader) IsTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// ReadLine reads a single line from stdin using a buffered scanner.
+func (s *stdinPhraseReader) ReadLine() (string, error) {
+	scanner := bufio.NewScanner(os.Stdin)
+	if !scanner.Scan() {
+		err := scanner.Err()
+		if err != nil {
+			return "", fmt.Errorf("failed to read pairing "+
+				"phrase from stdin: %w", err)
+		}
+
+		return "", fmt.Errorf("no pairing phrase provided " +
+			"on stdin")
+	}
+
+	return scanner.Text(), nil
+}
+
+// ReadPassword reads input from the terminal with echo disabled.
+func (s *stdinPhraseReader) ReadPassword() ([]byte, error) {
+	return term.ReadPassword(int(os.Stdin.Fd()))
+}
+
+// Getenv returns the value of the given environment variable.
+func (s *stdinPhraseReader) Getenv(key string) string {
+	return os.Getenv(key)
+}
+
+// resolvePairingPhrase determines the pairing phrase from the first
+// available source: positional argument, stdin (with terminal detection
+// for secure entry), or the LNGET_LN_LNC_PAIRING_PHRASE environment
+// variable. The reader parameter abstracts I/O for testability.
+func resolvePairingPhrase(args []string, fromStdin bool,
+	reader PhraseReader, promptWriter *os.File,
+) (string, error) {
+	// Resolve the phrase from the first source that provides one.
+	var phrase string
+
+	switch {
+	case len(args) >= 1:
+		phrase = args[0]
+
+	case fromStdin:
+		// If stdin is a terminal, use secure input with echo
+		// disabled so the phrase is not visible on screen.
+		if reader.IsTerminal() {
+			_, _ = fmt.Fprint(
+				promptWriter, "Enter pairing phrase: ",
+			)
+
+			raw, err := reader.ReadPassword()
+			if err != nil {
+				return "", fmt.Errorf("failed to read "+
+					"pairing phrase: %w", err)
+			}
+
+			// Print newline since ReadPassword doesn't
+			// echo one.
+			_, _ = fmt.Fprintln(promptWriter)
+
+			phrase = strings.TrimSpace(string(raw))
+		} else {
+			line, err := reader.ReadLine()
+			if err != nil {
+				return "", err
+			}
+
+			phrase = strings.TrimSpace(line)
+		}
+
+	default:
+		phrase = reader.Getenv("LNGET_LN_LNC_PAIRING_PHRASE")
+	}
+
+	if phrase == "" {
+		return "", fmt.Errorf("pairing phrase required: provide " +
+			"as argument, via --stdin, or set " +
+			"LNGET_LN_LNC_PAIRING_PHRASE")
+	}
+
+	return phrase, nil
 }
 
 // newLNCSessionsCmd creates the ln lnc sessions subcommand.

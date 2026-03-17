@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/lightninglabs/lnget/l402"
@@ -54,6 +55,9 @@ func (t *L402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	domain := l402.DomainFromURL(req.URL)
 
+	log.Debugf("L402 transport: %s %s (domain=%s)",
+		req.Method, req.URL, domain)
+
 	// challengeResp holds the 402 response to use for HandleChallenge.
 	// It may come from Path A's rejection (if the server bundles a
 	// fresh challenge) or from the unauthenticated Path B request.
@@ -62,6 +66,7 @@ func (t *L402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Try to get an existing token for this domain.
 	token, err := t.Handler.GetTokenForDomain(domain)
 	if err == nil {
+		log.Debugf("Found cached token for %s", domain)
 		// Clone the request to avoid modifying the original.
 		reqWithToken := req.Clone(req.Context())
 
@@ -84,8 +89,13 @@ func (t *L402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		// If the token worked, return the response.
 		if resp.StatusCode != http.StatusPaymentRequired {
+			log.Debugf("Cached token accepted for %s (status=%d)",
+				domain, resp.StatusCode)
+
 			return resp, nil
 		}
+
+		log.Infof("Cached token rejected for %s, evicting", domain)
 
 		// Token was rejected by the server (expired, revoked, or
 		// root key rotated). Evict it from the store so Path B's
@@ -127,6 +137,13 @@ func (t *L402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		challengeResp = resp
 	}
 
+	log.Infof("Received L402 challenge for %s", domain)
+
+	// Print payment status to stderr so the user knows what's
+	// happening.
+	fmt.Fprintf(os.Stderr, "L402 payment required for %s, paying...\n",
+		domain)
+
 	// Close the challenge response body since we'll retry after
 	// payment.
 	_, _ = io.Copy(io.Discard, challengeResp.Body)
@@ -152,8 +169,12 @@ func (t *L402Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Context(), challengeResp, domain,
 	)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Payment failed: %v\n", err)
+
 		return nil, fmt.Errorf("L402 payment failed: %w", err)
 	}
+
+	fmt.Fprintf(os.Stderr, "Payment complete, retrying request...\n")
 
 	// Retry the request with the paid token, mirroring the server's
 	// prefix choice.

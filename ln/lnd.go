@@ -42,6 +42,9 @@ func NewLNDBackend(cfg *LNDConfig) *LNDBackend {
 
 // Start connects to the lnd node.
 func (l *LNDBackend) Start(ctx context.Context) error {
+	log.Infof("Connecting to lnd at %s (network=%s)",
+		l.cfg.Host, l.cfg.Network)
+
 	network, err := parseNetwork(l.cfg.Network)
 	if err != nil {
 		return err
@@ -54,10 +57,14 @@ func (l *LNDBackend) Start(ctx context.Context) error {
 		TLSPath:            l.cfg.TLSCertPath,
 	})
 	if err != nil {
+		log.Warnf("lnd connection failed: %v", err)
+
 		return fmt.Errorf("failed to connect to lnd: %w", err)
 	}
 
 	l.client = client
+
+	log.Infof("Connected to lnd successfully")
 
 	return nil
 }
