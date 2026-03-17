@@ -2,13 +2,12 @@ package ln
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
-
-	"encoding/hex"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/lightninglabs/lightning-node-connect/mailbox"
