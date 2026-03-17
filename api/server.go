@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/lightninglabs/lnget/config"
@@ -72,10 +73,15 @@ func NewServer(cfg *ServerConfig) *Server {
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 
 	// Serve static dashboard files. An explicit directory takes
-	// priority over embedded assets.
+	// priority over embedded assets. Next.js static export places
+	// pages at <route>.html (e.g. payments.html) and creates
+	// <route>/ directories for RSC payloads. A plain FileServer
+	// would show directory listings for /payments/ instead of
+	// serving payments.html, so we use a custom handler that
+	// resolves clean URLs to their .html counterparts.
 	switch {
 	case cfg.DashboardDir != "":
-		mux.Handle("/", http.FileServer(
+		mux.Handle("/", nextStaticHandler(
 			http.Dir(cfg.DashboardDir),
 		))
 
@@ -85,7 +91,7 @@ func NewServer(cfg *ServerConfig) *Server {
 			log.Printf("warning: failed to load embedded "+
 				"dashboard: %v", err)
 		} else {
-			mux.Handle("/", http.FileServer(
+			mux.Handle("/", nextStaticHandler(
 				http.FS(sub),
 			))
 		}
@@ -178,6 +184,47 @@ func isLocalhostOrigin(origin string) bool {
 	host := u.Hostname()
 
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+// nextStaticHandler returns an http.Handler that serves files from the
+// given filesystem with Next.js static export routing. For clean URLs
+// like /payments, it tries the path as-is first, then <path>.html,
+// then falls back to index.html. This prevents directory listings for
+// routes that have both a .html file and an RSC payload directory.
+func nextStaticHandler(fsys http.FileSystem) http.Handler {
+	fileServer := http.FileServer(fsys)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// Serve static assets (_next/*, *.css, *.js, etc.)
+		// and the root index directly.
+		if path == "/" || strings.Contains(path, ".") ||
+			strings.HasPrefix(path, "/_next/") {
+
+			fileServer.ServeHTTP(w, r)
+
+			return
+		}
+
+		// For clean URLs (e.g. /payments), try <path>.html.
+		// Strip trailing slash first.
+		cleanPath := strings.TrimSuffix(path, "/")
+		htmlPath := cleanPath + ".html"
+
+		f, err := fsys.Open(htmlPath)
+		if err == nil {
+			_ = f.Close()
+
+			r.URL.Path = htmlPath
+			fileServer.ServeHTTP(w, r)
+
+			return
+		}
+
+		// Fall back to the default file server.
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 // writeJSON writes a JSON response.

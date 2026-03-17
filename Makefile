@@ -212,9 +212,11 @@ build: #? Build debug binaries and place in project directory
 	@$(call print, "Building debug binaries.")
 	$(GOBUILD) -trimpath -tags="$(DEV_TAGS)" $(DEV_GCFLAGS) $(DEV_LDFLAGS) -o lnget ./cmd/lnget
 
-install: #? Build and install binaries to GOPATH/bin
-	@$(call print, "Installing binaries.")
-	$(GOINSTALL) -trimpath -tags="$(DEV_TAGS)" $(DEV_LDFLAGS) ./cmd/lnget
+install: dashboard-build #? Build and install binaries with embedded dashboard to GOPATH/bin
+	@$(call print, "Installing binaries with embedded dashboard.")
+	rm -rf api/dashboard_dist
+	cp -r $(DASHBOARD_DIR)/out api/dashboard_dist
+	$(GOINSTALL) -trimpath -tags="$(DEV_TAGS) dashboard" $(DEV_LDFLAGS) ./cmd/lnget
 
 clean: #? Remove build artifacts
 	@$(call print, "Cleaning build artifacts.")

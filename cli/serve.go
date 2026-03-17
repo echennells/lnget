@@ -77,27 +77,12 @@ func runServe(addr, dashboardDir string) error {
 		return fmt.Errorf("failed to open token store: %w", err)
 	}
 
-	// Create Lightning backend (best-effort).
-	backend, err := createBackend(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"Warning: LN backend unavailable (%v)\n", err)
-		backend = ln.NewNoopBackend()
-	}
-
-	ctx := context.Background()
-
-	err = backend.Start(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"Warning: LN backend failed to start (%v)\n", err)
-		_ = backend.Stop()
-		backend = ln.NewNoopBackend()
-	}
-
-	defer func() {
-		_ = backend.Stop()
-	}()
+	// The serve command does not need a live LN backend. Payments
+	// are made by the CLI (lnget <url>), and holding an LNC session
+	// here would block the CLI from connecting. We use a noop
+	// backend so the dashboard status page simply reports that
+	// payments are handled by the CLI.
+	backend := ln.NewNoopBackend()
 
 	// Create and start the API server.
 	server := api.NewServer(&api.ServerConfig{

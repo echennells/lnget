@@ -1,7 +1,6 @@
 package api
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/lightninglabs/lnget/client"
@@ -20,7 +19,6 @@ func (s *Server) handleStatus(w http.ResponseWriter,
 	if s.backend != nil {
 		info, err := s.backend.GetInfo(r.Context())
 		if err != nil {
-			log.Printf("error getting backend info: %v", err)
 			status.Error = "backend unavailable"
 		} else {
 			status.Connected = true
