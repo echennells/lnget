@@ -131,8 +131,8 @@ func RegisterSubLogger(subsystem string,
 		logManager.handler.SubSystem(subsystem),
 	)
 
-	// Default to off so logging is silent unless explicitly enabled.
-	logger.SetLevel(btclog.LevelOff)
+	// Default to info so all subsystems log to file by default.
+	logger.SetLevel(btclog.LevelInfo)
 
 	logManager.loggers[subsystem] = SubLoggerEntry{
 		logger: logger,

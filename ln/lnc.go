@@ -171,12 +171,45 @@ func (l *LNCBackend) Start(ctx context.Context) error {
 
 	log.Infof("LNC websocket created, establishing gRPC connection...")
 
-	// Get the gRPC connection.
-	conn, err := getConn()
-	if err != nil {
-		log.Warnf("gRPC connection failed: %v", err)
+	// Get the gRPC connection with a timeout. The getConn call
+	// blocks during the Noise handshake, so without a timeout it
+	// can hang indefinitely if the pairing phrase is wrong or the
+	// relay is unreachable.
+	type connResult struct {
+		conn *grpc.ClientConn
+		err  error
+	}
 
-		return fmt.Errorf("failed to get gRPC connection: %w", err)
+	connTimeout := 30 * time.Second
+
+	connCh := make(chan connResult, 1)
+
+	go func() {
+		c, e := getConn()
+		connCh <- connResult{conn: c, err: e}
+	}()
+
+	var conn *grpc.ClientConn
+
+	select {
+	case res := <-connCh:
+		if res.err != nil {
+			log.Warnf("gRPC connection failed: %v", res.err)
+
+			return fmt.Errorf("failed to get gRPC "+
+				"connection: %w", res.err)
+		}
+
+		conn = res.conn
+
+	case <-time.After(connTimeout):
+		log.Warnf("gRPC connection timed out after %v", connTimeout)
+
+		return fmt.Errorf("LNC connection timed out after %v "+
+			"(check pairing phrase and network)", connTimeout)
+
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	log.Infof("gRPC connection established")

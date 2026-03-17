@@ -325,6 +325,8 @@ func runGet(cmd *cobra.Command, args []string) error {
 
 // createBackend creates the appropriate Lightning backend based on config.
 func createBackend(cfg *config.Config) (ln.Backend, error) {
+	log.Infof("Creating LN backend: mode=%s", cfg.LN.Mode)
+
 	switch cfg.LN.Mode {
 	case config.LNModeLND:
 		return ln.NewLNDBackend(&ln.LNDConfig{
@@ -361,14 +363,10 @@ func createBackend(cfg *config.Config) (ln.Backend, error) {
 	}
 }
 
-// initLogging sets up file-based logging. If --debuglevel is provided,
-// logs are written to the file specified by --logfile (defaulting to
-// ~/.lnget/lnget.log).
+// initLogging sets up file-based logging. Logs are always written to
+// ~/.lnget/lnget.log (or --logfile) at info level by default. Use
+// --debuglevel to increase verbosity.
 func initLogging() error {
-	if flags.debugLevel == "" {
-		return nil
-	}
-
 	// Determine log file path.
 	logPath := flags.logFile
 	if logPath == "" {
@@ -389,10 +387,12 @@ func initLogging() error {
 		return err
 	}
 
-	// Parse and apply the debug levels.
-	err = build.ParseAndSetDebugLevels(flags.debugLevel)
-	if err != nil {
-		return err
+	// If a custom debug level was provided, override the defaults.
+	if flags.debugLevel != "" {
+		err = build.ParseAndSetDebugLevels(flags.debugLevel)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
