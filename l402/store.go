@@ -3,6 +3,8 @@ package l402
 import (
 	"errors"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/lightninglabs/aperture/l402"
@@ -16,6 +18,10 @@ var (
 
 	// ErrTokenExpired is the error returned when a token has expired.
 	ErrTokenExpired = errors.New("token expired")
+
+	// ErrInvalidDomain is returned when a domain sanitizes to an unsafe
+	// value such as "..", ".", or an empty string.
+	ErrInvalidDomain = errors.New("invalid domain")
 )
 
 // Store manages L402 tokens on a per-domain basis. Unlike the aperture Store
@@ -59,8 +65,9 @@ func DomainFromURL(u *url.URL) string {
 	return host
 }
 
-// SanitizeDomain converts a domain to a filesystem-safe string.
-func SanitizeDomain(domain string) string {
+// SanitizeDomain converts a domain to a filesystem-safe string. It returns
+// an error if the result is empty or a path traversal component ("." or "..").
+func SanitizeDomain(domain string) (string, error) {
 	// Replace colons with underscores for filesystem compatibility.
 	result := make([]byte, 0, len(domain))
 
@@ -83,14 +90,57 @@ func SanitizeDomain(domain string) string {
 		}
 	}
 
-	return string(result)
+	s := string(result)
+
+	// Reject empty results and path traversal components.
+	if s == "" || s == "." || s == ".." {
+		return "", ErrInvalidDomain
+	}
+
+	return s, nil
 }
 
 // GetOriginalDomain attempts to reverse the sanitization to get the original
-// domain. This is a best-effort operation since some information may be lost.
-func GetOriginalDomain(sanitized string) string {
-	// Convert underscores back to colons (for ports).
-	return strings.Replace(sanitized, "_", ":", 1)
+// domain. It first checks for a .domain metadata file (written by StoreToken),
+// then falls back to a best-effort heuristic that replaces the last underscore
+// with a colon (for host:port). The last underscore is used because port
+// numbers never contain underscores, while hostnames may.
+func GetOriginalDomain(baseDir, sanitized string) string {
+	// Try reading the metadata file first.
+	metaPath := filepath.Join(baseDir, sanitized, ".domain")
+	if data, err := os.ReadFile(metaPath); err == nil {
+		if s := strings.TrimSpace(string(data)); s != "" {
+			return s
+		}
+	}
+
+	// Fallback: replace the last underscore with a colon, since port
+	// numbers cannot contain underscores.
+	idx := strings.LastIndex(sanitized, "_")
+	if idx >= 0 {
+		return sanitized[:idx] + ":" + sanitized[idx+1:]
+	}
+
+	return sanitized
+}
+
+// storeDomainMetadata writes the original domain name to a .domain file
+// inside the sanitized directory, so AllTokens can recover it losslessly.
+func storeDomainMetadata(baseDir, domain string) error {
+	sanitized, err := SanitizeDomain(domain)
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Join(baseDir, sanitized)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+
+	return os.WriteFile(
+		filepath.Join(dir, ".domain"),
+		[]byte(domain+"\n"), 0600,
+	)
 }
 
 // zeroPreimage is an empty preimage used to check pending status.
