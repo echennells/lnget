@@ -91,12 +91,20 @@ func ParseChallenge(header string) (*Challenge, error) {
 			header)
 	}
 
-	// Decode the macaroon from base64.
+	// Decode the macaroon from base64. Some servers use URL-safe
+	// base64, so we try standard first and fall back to URL-safe.
 	macBase64 := matches[2]
 
 	macBytes, err := base64.StdEncoding.DecodeString(macBase64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode macaroon: %w", err)
+		macBytes, err = base64.RawURLEncoding.DecodeString(
+			macBase64,
+		)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"failed to decode macaroon: %w", err,
+			)
+		}
 	}
 
 	// Validate the macaroon can be unmarshaled.
