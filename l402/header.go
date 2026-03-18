@@ -100,11 +100,9 @@ func ParseChallenge(header string) (*Challenge, error) {
 		macBytes, err = base64.RawURLEncoding.DecodeString(
 			macBase64,
 		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"failed to decode macaroon: %w", err,
-			)
-		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode macaroon: %w", err)
 	}
 
 	// Validate the macaroon can be unmarshaled.
